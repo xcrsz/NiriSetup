@@ -233,7 +233,7 @@ func findRenderDevice() string {
 
 func installNiri() tea.Cmd {
 	return func() tea.Msg {
-		pkgs := []string{"niri", "wlroots019", "xwayland-satellite", "seatd", "waybar", "grim", "jq", "wofi", "alacritty", "pam_xdg", "fuzzel", "swaylock", "foot", "wlsunset", "swaybg", "mako", "swayidle"}
+		pkgs := []string{"drm-kmod", "mesa-libs", "mesa-dri", "niri", "xwayland-satellite", "seatd", "waybar", "grim", "jq", "wofi", "alacritty", "pam_xdg", "fuzzel", "swaylock", "foot", "wlsunset", "swaybg", "mako", "swayidle"}
 		var logs []string
 		var failed []string
 
@@ -341,7 +341,8 @@ func setupSystem() tea.Cmd {
 
 		// Check if already in .profile
 		profileContent, err := os.ReadFile(profilePath)
-		if err != nil || !strings.Contains(string(profileContent), "XDG_RUNTIME_DIR") {
+		profileStr := string(profileContent)
+		if err != nil || !strings.Contains(profileStr, "XDG_RUNTIME_DIR") {
 			f, err := os.OpenFile(profilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				logs = append(logs, fmt.Sprintf("Warning: Could not write to %s: %v", profilePath, err))
@@ -350,9 +351,26 @@ func setupSystem() tea.Cmd {
 				f.WriteString(xdgLine + "\n")
 				f.Close()
 				logs = append(logs, fmt.Sprintf("Added XDG_RUNTIME_DIR to %s: OK", profilePath))
+				// Re-read for next check
+				profileContent, _ = os.ReadFile(profilePath)
+				profileStr = string(profileContent)
 			}
 		} else {
 			logs = append(logs, "XDG_RUNTIME_DIR already in .profile: OK")
+		}
+
+		// Step 5b: Set LIBSEAT_BACKEND for ConsoleKit2 session management
+		if !strings.Contains(profileStr, "LIBSEAT_BACKEND") {
+			f, err := os.OpenFile(profilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				logs = append(logs, fmt.Sprintf("Warning: Could not write to %s: %v", profilePath, err))
+			} else {
+				f.WriteString("export LIBSEAT_BACKEND=consolekit2\n")
+				f.Close()
+				logs = append(logs, "Added LIBSEAT_BACKEND=consolekit2 to .profile: OK")
+			}
+		} else {
+			logs = append(logs, "LIBSEAT_BACKEND already in .profile: OK")
 		}
 
 		// Step 6: Verify DRM render device is accessible
@@ -374,6 +392,9 @@ func setupSystem() tea.Cmd {
 
 		logs = append(logs, "")
 		logs = append(logs, "System setup complete. You may need to log out and back in for group changes to take effect.")
+		logs = append(logs, "")
+		logs = append(logs, "To start niri, switch to a TTY and run:")
+		logs = append(logs, "  ck-launch-session dbus-launch niri --session")
 
 		return statusMsg{status: strings.Join(logs, "\n")}
 	}
@@ -432,6 +453,8 @@ func configureNiri() tea.Cmd {
 		if renderDev != "" {
 			msg += fmt.Sprintf("\nDRM render device set to: %s", renderDev)
 		}
+		msg += "\n\nTo start niri, switch to a TTY and run:"
+		msg += "\n  ck-launch-session dbus-launch niri --session"
 		return statusMsg{status: msg}
 	}
 }
