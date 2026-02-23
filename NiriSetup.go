@@ -233,7 +233,7 @@ func findRenderDevice() string {
 
 func installNiri() tea.Cmd {
 	return func() tea.Msg {
-		pkgs := []string{"drm-kmod", "mesa-libs", "mesa-dri", "niri", "xwayland-satellite", "seatd", "waybar", "grim", "jq", "wofi", "alacritty", "pam_xdg", "fuzzel", "swaylock", "foot", "wlsunset", "swaybg", "mako", "swayidle"}
+		pkgs := []string{"drm-kmod", "mesa-libs", "mesa-dri", "consolekit2", "dbus", "niri", "xwayland-satellite", "seatd", "waybar", "grim", "jq", "wofi", "alacritty", "pam_xdg", "fuzzel", "swaylock", "foot", "wlsunset", "swaybg", "mako", "swayidle"}
 		var logs []string
 		var failed []string
 
@@ -269,11 +269,13 @@ func setupSystem() tea.Cmd {
 	return func() tea.Msg {
 		var logs []string
 
-		// Step 1: Enable and start seatd
+		// Step 1: Enable and start required services
 		steps := []struct {
 			desc string
 			cmd  []string
 		}{
+			{"Enabling dbus service", []string{"sudo", "sysrc", "dbus_enable=YES"}},
+			{"Starting dbus service", []string{"sudo", "service", "dbus", "start"}},
 			{"Enabling seatd service", []string{"sudo", "sysrc", "seatd_enable=YES"}},
 			{"Starting seatd service", []string{"sudo", "service", "seatd", "start"}},
 		}
@@ -393,8 +395,8 @@ func setupSystem() tea.Cmd {
 		logs = append(logs, "")
 		logs = append(logs, "System setup complete. You may need to log out and back in for group changes to take effect.")
 		logs = append(logs, "")
-		logs = append(logs, "To start niri, switch to a TTY and run:")
-		logs = append(logs, "  ck-launch-session dbus-launch niri --session")
+		logs = append(logs, "To start niri, switch to a TTY (Ctrl+Alt+F2) and run:")
+		logs = append(logs, "  LIBSEAT_BACKEND=consolekit2 ck-launch-session dbus-launch niri --session")
 
 		return statusMsg{status: strings.Join(logs, "\n")}
 	}
@@ -453,8 +455,8 @@ func configureNiri() tea.Cmd {
 		if renderDev != "" {
 			msg += fmt.Sprintf("\nDRM render device set to: %s", renderDev)
 		}
-		msg += "\n\nTo start niri, switch to a TTY and run:"
-		msg += "\n  ck-launch-session dbus-launch niri --session"
+		msg += "\n\nTo start niri, switch to a TTY (Ctrl+Alt+F2) and run:"
+		msg += "\n  LIBSEAT_BACKEND=consolekit2 ck-launch-session dbus-launch niri --session"
 		return statusMsg{status: msg}
 	}
 }
