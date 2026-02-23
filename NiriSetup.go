@@ -76,7 +76,7 @@ func initialModel() model {
 
 	return model{
 		state:   menuView,
-		choices: []string{"Install Niri", "Configure Niri", "Validate Config", "Save Logs", "Exit"},
+		choices: []string{"Install Niri", "Setup System", "Configure Niri", "Validate Config", "Save Logs", "Exit"},
 	}
 }
 
@@ -113,6 +113,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "Install Niri":
 					m.state = installView
 					return m, installNiri()
+				case "Setup System":
+					m.state = installView
+					return m, setupSystem()
 				case "Configure Niri":
 					m.state = actionView
 					m.actionMsg = "Configuring Niri..."
@@ -227,11 +230,145 @@ func installNiri() tea.Cmd {
 	}
 }
 
+func setupSystem() tea.Cmd {
+	return func() tea.Msg {
+		var logs []string
+
+		// Step 1: Enable and start seatd
+		steps := []struct {
+			desc string
+			cmd  []string
+		}{
+			{"Enabling seatd service", []string{"sudo", "sysrc", "seatd_enable=YES"}},
+			{"Starting seatd service", []string{"sudo", "service", "seatd", "start"}},
+		}
+
+		for _, step := range steps {
+			cmd := exec.Command(step.cmd[0], step.cmd[1:]...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				// seatd may already be running; don't fail on that
+				outStr := string(out)
+				if !strings.Contains(outStr, "already running") {
+					logs = append(logs, fmt.Sprintf("Warning: %s: %s", step.desc, outStr))
+				} else {
+					logs = append(logs, fmt.Sprintf("%s: already running", step.desc))
+				}
+			} else {
+				logs = append(logs, fmt.Sprintf("%s: OK", step.desc))
+			}
+		}
+
+		// Step 2: Add user to video group for GPU/DRM access
+		currentUser := os.Getenv("USER")
+		if currentUser == "" {
+			currentUser = os.Getenv("LOGNAME")
+		}
+		if currentUser != "" {
+			cmd := exec.Command("sudo", "pw", "groupmod", "video", "-m", currentUser)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				logs = append(logs, fmt.Sprintf("Warning: Adding user to video group: %s", string(out)))
+			} else {
+				logs = append(logs, fmt.Sprintf("Added user '%s' to video group: OK", currentUser))
+			}
+		} else {
+			logs = append(logs, "Warning: Could not determine current user for group setup")
+		}
+
+		// Step 3: Load DRM kernel module if not loaded
+		cmd := exec.Command("sudo", "kldload", "drm")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			outStr := string(out)
+			if strings.Contains(outStr, "already loaded") || strings.Contains(outStr, "module already loaded") {
+				logs = append(logs, "Loading DRM kernel module: already loaded")
+			} else {
+				logs = append(logs, fmt.Sprintf("Warning: Loading DRM kernel module: %s", outStr))
+			}
+		} else {
+			logs = append(logs, "Loading DRM kernel module: OK")
+		}
+
+		// Step 4: Ensure drm is loaded at boot
+		cmd = exec.Command("sudo", "sysrc", "kld_list+=drm")
+		out, err = cmd.CombinedOutput()
+		if err != nil {
+			logs = append(logs, fmt.Sprintf("Warning: Persisting DRM module to boot: %s", string(out)))
+		} else {
+			logs = append(logs, "Persisting DRM module to boot: OK")
+		}
+
+		// Step 5: Set up XDG_RUNTIME_DIR via pam_xdg or profile
+		homeDir, _ := os.UserHomeDir()
+		profilePath := filepath.Join(homeDir, ".profile")
+		xdgLine := fmt.Sprintf("export XDG_RUNTIME_DIR=/tmp/%d-runtime-dir", os.Geteuid())
+
+		// Check if already in .profile
+		profileContent, err := os.ReadFile(profilePath)
+		if err != nil || !strings.Contains(string(profileContent), "XDG_RUNTIME_DIR") {
+			f, err := os.OpenFile(profilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				logs = append(logs, fmt.Sprintf("Warning: Could not write to %s: %v", profilePath, err))
+			} else {
+				f.WriteString("\n# Set XDG_RUNTIME_DIR for Wayland compositors\n")
+				f.WriteString(xdgLine + "\n")
+				f.Close()
+				logs = append(logs, fmt.Sprintf("Added XDG_RUNTIME_DIR to %s: OK", profilePath))
+			}
+		} else {
+			logs = append(logs, "XDG_RUNTIME_DIR already in .profile: OK")
+		}
+
+		logs = append(logs, "")
+		logs = append(logs, "System setup complete. You may need to log out and back in for group changes to take effect.")
+
+		return statusMsg{status: strings.Join(logs, "\n")}
+	}
+}
+
 func configureNiri() tea.Cmd {
 	return func() tea.Msg {
-		// Simulate configuration work
-		time.Sleep(2 * time.Second)
-		return statusMsg{status: "Niri configuration completed successfully."}
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return statusMsg{status: "Failed to determine home directory", err: err}
+		}
+
+		// Create ~/.config/niri directory
+		niriConfigDir := filepath.Join(homeDir, ".config", "niri")
+		if err := os.MkdirAll(niriConfigDir, 0755); err != nil {
+			return statusMsg{status: fmt.Sprintf("Failed to create config directory: %v", err), err: err}
+		}
+
+		// Determine the source config.kdl path (same directory as the executable)
+		exePath, err := os.Executable()
+		if err != nil {
+			return statusMsg{status: "Failed to determine executable path", err: err}
+		}
+		srcConfig := filepath.Join(filepath.Dir(exePath), "config.kdl")
+
+		// Fall back to current working directory
+		if _, err := os.Stat(srcConfig); os.IsNotExist(err) {
+			cwd, _ := os.Getwd()
+			srcConfig = filepath.Join(cwd, "config.kdl")
+		}
+
+		if _, err := os.Stat(srcConfig); os.IsNotExist(err) {
+			return statusMsg{status: "config.kdl not found next to executable or in current directory", err: err}
+		}
+
+		// Copy config.kdl to ~/.config/niri/config.kdl
+		srcData, err := os.ReadFile(srcConfig)
+		if err != nil {
+			return statusMsg{status: fmt.Sprintf("Failed to read source config: %v", err), err: err}
+		}
+
+		destConfig := filepath.Join(niriConfigDir, "config.kdl")
+		if err := os.WriteFile(destConfig, srcData, 0644); err != nil {
+			return statusMsg{status: fmt.Sprintf("Failed to write config: %v", err), err: err}
+		}
+
+		return statusMsg{status: fmt.Sprintf("Niri configuration copied to %s", destConfig)}
 	}
 }
 
