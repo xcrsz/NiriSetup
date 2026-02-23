@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -211,6 +212,25 @@ func isPackageInstalled(pkg string) bool {
 	return cmd.Run() == nil
 }
 
+// findRenderDevice looks for the first DRM render node in /dev/dri/.
+func findRenderDevice() string {
+	entries, err := os.ReadDir("/dev/dri")
+	if err != nil {
+		return ""
+	}
+	var renderNodes []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "renderD") {
+			renderNodes = append(renderNodes, filepath.Join("/dev/dri", e.Name()))
+		}
+	}
+	if len(renderNodes) == 0 {
+		return ""
+	}
+	sort.Strings(renderNodes)
+	return renderNodes[0]
+}
+
 func installNiri() tea.Cmd {
 	return func() tea.Msg {
 		pkgs := []string{"niri", "wlroots019", "xwayland-satellite", "seatd", "waybar", "grim", "jq", "wofi", "alacritty", "pam_xdg", "fuzzel", "swaylock", "foot", "wlsunset", "swaybg", "mako", "swayidle"}
@@ -335,6 +355,23 @@ func setupSystem() tea.Cmd {
 			logs = append(logs, "XDG_RUNTIME_DIR already in .profile: OK")
 		}
 
+		// Step 6: Verify DRM render device is accessible
+		renderDev := findRenderDevice()
+		if renderDev != "" {
+			logs = append(logs, fmt.Sprintf("Found DRM render device: %s", renderDev))
+			// Check if the device is readable by the current user
+			f, err := os.Open(renderDev)
+			if err != nil {
+				logs = append(logs, fmt.Sprintf("Warning: Cannot access %s: %v (check video group membership)", renderDev, err))
+			} else {
+				f.Close()
+				logs = append(logs, fmt.Sprintf("DRM render device %s is accessible: OK", renderDev))
+			}
+		} else {
+			logs = append(logs, "Warning: No DRM render device found in /dev/dri/")
+			logs = append(logs, "  GPU drivers may not be loaded. Check that drm and your GPU kernel module are loaded.")
+		}
+
 		logs = append(logs, "")
 		logs = append(logs, "System setup complete. You may need to log out and back in for group changes to take effect.")
 
@@ -378,12 +415,24 @@ func configureNiri() tea.Cmd {
 			return statusMsg{status: fmt.Sprintf("Failed to read source config: %v", err), err: err}
 		}
 
+		// Detect DRM render device and add debug config if found
+		configStr := string(srcData)
+		renderDev := findRenderDevice()
+		if renderDev != "" && !strings.Contains(configStr, "render-drm-device") {
+			debugBlock := fmt.Sprintf("\n// Explicitly set the DRM render device for EGL display creation.\ndebug {\n    render-drm-device \"%s\"\n}\n", renderDev)
+			configStr += debugBlock
+		}
+
 		destConfig := filepath.Join(niriConfigDir, "config.kdl")
-		if err := os.WriteFile(destConfig, srcData, 0644); err != nil {
+		if err := os.WriteFile(destConfig, []byte(configStr), 0644); err != nil {
 			return statusMsg{status: fmt.Sprintf("Failed to write config: %v", err), err: err}
 		}
 
-		return statusMsg{status: fmt.Sprintf("Niri configuration copied to %s", destConfig)}
+		msg := fmt.Sprintf("Niri configuration copied to %s", destConfig)
+		if renderDev != "" {
+			msg += fmt.Sprintf("\nDRM render device set to: %s", renderDev)
+		}
+		return statusMsg{status: msg}
 	}
 }
 
