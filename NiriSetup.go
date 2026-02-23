@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -207,25 +206,41 @@ func (m model) renderActionView() string {
 	return lipgloss.JoinVertical(lipgloss.Left, actionStyle.Render(fmt.Sprintf("%s\n\nPlease wait...", m.actionMsg)))
 }
 
+func isPackageInstalled(pkg string) bool {
+	cmd := exec.Command("pkg", "info", pkg)
+	return cmd.Run() == nil
+}
+
 func installNiri() tea.Cmd {
 	return func() tea.Msg {
 		pkgs := []string{"niri", "wlroots019", "xwayland-satellite", "seatd", "waybar", "grim", "jq", "wofi", "alacritty", "pam_xdg", "fuzzel", "swaylock", "foot", "wlsunset", "swaybg", "mako", "swayidle"}
 		var logs []string
+		var failed []string
 
 		for _, pkg := range pkgs {
+			// Skip packages that are already installed
+			if isPackageInstalled(pkg) {
+				logs = append(logs, fmt.Sprintf("Already installed: %s", pkg))
+				continue
+			}
+
 			cmd := exec.Command("sudo", "pkg", "install", "-y", pkg)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
-				return statusMsg{status: fmt.Sprintf("Failed to install %s", pkg), err: fmt.Errorf(string(out))}
+				outStr := strings.TrimSpace(string(out))
+				logs = append(logs, fmt.Sprintf("Failed to install %s: %s", pkg, outStr))
+				failed = append(failed, pkg)
+				continue
 			}
-			time.Sleep(500 * time.Millisecond) // Simulate install time for visual feedback
 
-			// Append success message to logs
-			log := fmt.Sprintf("Successfully installed %s", pkg)
-			logs = append(logs, log)
+			logs = append(logs, fmt.Sprintf("Successfully installed %s", pkg))
 		}
 
-		// Return all logs as a combined message
+		if len(failed) > 0 {
+			logs = append(logs, fmt.Sprintf("\nFailed packages (%d): %s", len(failed), strings.Join(failed, ", ")))
+			return statusMsg{status: strings.Join(logs, "\n"), err: fmt.Errorf("%d packages failed to install", len(failed))}
+		}
+
 		return statusMsg{status: strings.Join(logs, "\n")}
 	}
 }
