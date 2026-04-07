@@ -95,4 +95,3 @@ For any issues or questions regarding NiriSetup, please feel free to open an iss
 - [Bubble Tea](https://github.com/charmbracelet/bubbletea) - TUI Framework for Go.
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) - Terminal Styling Library for Go.
 - [Niri](https://github.com/YaLTeR/niri) - The Wayland compositor that NiriSetup is designed to install and configure.
-```
