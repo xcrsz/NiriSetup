@@ -96,9 +96,3 @@ For any issues or questions regarding NiriSetup, please feel free to open an iss
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) - Terminal Styling Library for Go.
 - [Niri](https://github.com/YaLTeR/niri) - The Wayland compositor that NiriSetup is designed to install and configure.
 ```
-
-### Key Changes:
-- The note under **Requirements** now mentions that NiriSetup will automatically install Niri and other required dependencies if they are not already installed.
-- This gives users a clearer understanding that they don't need to worry about manually installing Niri and its dependencies, as NiriSetup will handle it.
-
-Let me know if you need further adjustments!
